@@ -1,0 +1,22 @@
+[package]
+name = "jx"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+data-encoding = "2.11.1"
+clap = { version = "4.6.7", features = ["derive"] }
+fancy-regex = "0.19.2"
+libc = "0.2.189"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+percent-encoding = "2"
+crossbeam-channel = "0.5"
+logos = "0.16.1"
+memchr = "2.8.3"
+indexmap = "2"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
