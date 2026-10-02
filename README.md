@@ -2,6 +2,8 @@
 
 A fast, jq-compatible JSON processor written in Rust.
 
+Download a prebuilt binary for Linux or macOS from [Releases](https://github.com/zikous/jx/releases), or build from source:
+
 ```sh
 cargo build --release
 echo '{"users":[{"name":"Ada"},{"name":"Linus"}]}' | ./target/release/jx '.users[].name'
