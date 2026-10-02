@@ -198,6 +198,15 @@ fn generators_combine_by_cartesian_product() {
         run("\"\\(1, 2)-\\(3, 4)\"", "null"),
         "\"1-3\"\n\"2-3\"\n\"1-4\"\n\"2-4\"\n"
     );
+    assert_eq!(run("first(1 + repeat(1))", "null"), "2\n");
+    assert_eq!(run("[limit(3; . + range(1000000000))]", "0"), "[0,1,2]\n");
+}
+
+#[test]
+fn binary_ops_keep_outputs_before_later_errors() {
+    let out = common::exec(&["1 + (2, error(\"x\"))"], "null");
+    assert_eq!(out.code, 5);
+    assert_eq!(out.stdout, "3\n");
 }
 
 #[test]

@@ -9,14 +9,12 @@ mod parser;
 mod reader;
 mod records;
 mod run;
+mod stack;
 mod value;
 mod writer;
 
 use std::io;
 use std::process::ExitCode;
-
-const STACK_RED_ZONE: usize = 32 * 1024;
-const STACK_GROWTH: usize = 2 * 1024 * 1024;
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -34,7 +32,7 @@ fn main() -> ExitCode {
             return ExitCode::from(err.exit_code());
         }
     };
-    match stacker::maybe_grow(STACK_RED_ZONE, STACK_GROWTH, || run::run(&settings)) {
+    match stacker::maybe_grow(stack::RED_ZONE, stack::GROWTH, || run::run(&settings)) {
         Ok(code) => ExitCode::from(code as u8),
         Err(err) if err.is_broken_pipe() => ExitCode::SUCCESS,
         Err(err) => {

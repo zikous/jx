@@ -12,11 +12,9 @@ use crate::library;
 use crate::parser::{self, *};
 use crate::reader;
 use crate::records::Records;
+use crate::stack;
 use crate::value::{self, Map, Value, compare, describe, truncate};
 use crate::writer::dump;
-
-const STACK_RED_ZONE: usize = 32 * 1024;
-const STACK_GROWTH: usize = 2 * 1024 * 1024;
 
 /// Why evaluation stopped early.
 pub enum Stop {
@@ -147,7 +145,7 @@ pub struct Program {
     /// The parse of each builtin written in the language, by registry position, once needed.
     definitions: Vec<OnceCell<&'static FuncDef>>,
     labels: Cell<u64>,
-    recursion_depth: Cell<usize>,
+    call_depth: Cell<usize>,
     recursion_limit: usize,
     environment: OnceCell<Value>,
 }
@@ -196,7 +194,7 @@ impl Program {
                 .map(|_| OnceCell::new())
                 .collect(),
             labels: Cell::new(0),
-            recursion_depth: Cell::new(0),
+            call_depth: Cell::new(0),
             recursion_limit: recursion_limit.unwrap_or(usize::MAX),
             environment: OnceCell::new(),
         })
@@ -273,17 +271,21 @@ impl Program {
         self.labels.get()
     }
 
-    fn enter_eval<T>(&self, f: impl FnOnce() -> Result<T, Stop>) -> Result<T, Stop> {
-        stacker::maybe_grow(STACK_RED_ZONE, STACK_GROWTH, || {
-            let depth = self.recursion_depth.get();
+    fn enter_call<T>(&self, f: impl FnOnce() -> Result<T, Stop>) -> Result<T, Stop> {
+        stacker::maybe_grow(stack::RED_ZONE, stack::GROWTH, || {
+            let depth = self.call_depth.get();
             if depth >= self.recursion_limit {
                 return Err(error("recursion limit exceeded"));
             }
-            self.recursion_depth.set(depth + 1);
+            self.call_depth.set(depth + 1);
             let result = f();
-            self.recursion_depth.set(depth);
+            self.call_depth.set(depth);
             result
         })
+    }
+
+    fn with_grown_stack<T>(&self, f: impl FnOnce() -> Result<T, Stop>) -> Result<T, Stop> {
+        stacker::maybe_grow(stack::RED_ZONE, stack::GROWTH, f)
     }
 
     pub fn collect(&self, ast: Node, env: &Env, input: Item) -> Result<Vec<Value>, Stop> {
@@ -350,7 +352,7 @@ impl Program {
     }
 
     pub fn eval(&self, ast: Node, env: &Env, input: Item, out: Out<'_>) -> R {
-        self.enter_eval(|| match ast {
+        self.with_grown_stack(|| match ast {
             Ast::Identity => out(input),
             Ast::Recurse => self.descend(input, out),
             Ast::Literal(value) => out(input.derive(value.clone())),
@@ -474,7 +476,7 @@ impl Program {
             How::Source(source) => {
                 let def = self.definition(index, source)?;
                 let call_env = self.enter(def, args, env, &None);
-                self.eval(def.body, &call_env, input, out)
+                self.enter_call(|| self.eval(def.body, &call_env, input, out))
             }
         }
     }
@@ -494,13 +496,11 @@ impl Program {
     /// `lhs op rhs`: the right side varies slowest.
     fn binary(&self, op: Op, lhs: Node, rhs: Node, env: &Env, input: Item, out: Out<'_>) -> R {
         let plain = input.detached();
-        let rhs_values = self.collect(rhs, env, plain.clone())?;
-        for r in rhs_values {
+        self.eval(rhs, env, plain.clone(), &mut |r| {
             self.eval(lhs, env, plain.clone(), &mut |l| {
-                out(input.derive(lift(apply(op, l.value, r.clone()))?))
-            })?;
-        }
-        Ok(())
+                out(input.derive(lift(apply(op, l.value, r.value.clone()))?))
+            })
+        })
     }
 
     /// `and` (stops on a falsy left side) and `or` (stops on a truthy one).
@@ -731,10 +731,12 @@ impl Program {
             return Err(error(format!("{name}/{} is not defined", args.len())));
         };
         match &frame.binding {
-            Binding::Closure(_, body, captured) => self.eval(body, captured, input, out),
+            Binding::Closure(_, body, captured) => {
+                self.enter_call(|| self.eval(body, captured, input, out))
+            }
             Binding::Func(def) => {
                 let call_env = self.enter(def, args, env, &Some(frame.clone()));
-                self.eval(def.body, &call_env, input, out)
+                self.enter_call(|| self.eval(def.body, &call_env, input, out))
             }
             _ => unreachable!("only closures and functions match"),
         }

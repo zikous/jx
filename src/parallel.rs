@@ -6,10 +6,8 @@ use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
+use crate::stack;
 use crossbeam_channel::{bounded, unbounded};
-
-const STACK_RED_ZONE: usize = 32 * 1024;
-const STACK_GROWTH: usize = 2 * 1024 * 1024;
 
 pub enum Flow {
     Continue,
@@ -44,7 +42,7 @@ pub fn run_ordered<C, T, W>(
         for _ in 0..workers {
             let (queue, done, init, stopped) = (queue.clone(), done.clone(), &init, &stopped);
             scope.spawn(move || {
-                stacker::maybe_grow(STACK_RED_ZONE, STACK_GROWTH, || {
+                stacker::maybe_grow(stack::RED_ZONE, stack::GROWTH, || {
                     let mut work = init();
                     for (seq, chunk) in queue {
                         if !stopped.load(Ordering::Relaxed)
