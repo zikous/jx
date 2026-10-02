@@ -15,6 +15,9 @@ use crate::records::Records;
 use crate::value::{self, Map, Value, compare, describe, truncate};
 use crate::writer::dump;
 
+const STACK_RED_ZONE: usize = 32 * 1024;
+const STACK_GROWTH: usize = 2 * 1024 * 1024;
+
 /// Why evaluation stopped early.
 pub enum Stop {
     /// An error, carrying any value.
@@ -144,11 +147,17 @@ pub struct Program {
     /// The parse of each builtin written in the language, by registry position, once needed.
     definitions: Vec<OnceCell<&'static FuncDef>>,
     labels: Cell<u64>,
+    recursion_depth: Cell<usize>,
+    recursion_limit: usize,
     environment: OnceCell<Value>,
 }
 
 impl Program {
-    pub fn compile(source: &str, environment: &Environment) -> AppResult<Self> {
+    pub fn compile(
+        source: &str,
+        environment: &Environment,
+        recursion_limit: Option<usize>,
+    ) -> AppResult<Self> {
         let source: &'static str = source.to_string().leak();
         let names: Vec<Name> = environment
             .named
@@ -187,6 +196,8 @@ impl Program {
                 .map(|_| OnceCell::new())
                 .collect(),
             labels: Cell::new(0),
+            recursion_depth: Cell::new(0),
+            recursion_limit: recursion_limit.unwrap_or(usize::MAX),
             environment: OnceCell::new(),
         })
     }
@@ -262,6 +273,19 @@ impl Program {
         self.labels.get()
     }
 
+    fn enter_eval<T>(&self, f: impl FnOnce() -> Result<T, Stop>) -> Result<T, Stop> {
+        stacker::maybe_grow(STACK_RED_ZONE, STACK_GROWTH, || {
+            let depth = self.recursion_depth.get();
+            if depth >= self.recursion_limit {
+                return Err(error("recursion limit exceeded"));
+            }
+            self.recursion_depth.set(depth + 1);
+            let result = f();
+            self.recursion_depth.set(depth);
+            result
+        })
+    }
+
     pub fn collect(&self, ast: Node, env: &Env, input: Item) -> Result<Vec<Value>, Stop> {
         let mut values = Vec::new();
         self.eval(ast, env, input, &mut |item| {
@@ -326,7 +350,7 @@ impl Program {
     }
 
     pub fn eval(&self, ast: Node, env: &Env, input: Item, out: Out<'_>) -> R {
-        match ast {
+        self.enter_eval(|| match ast {
             Ast::Identity => out(input),
             Ast::Recurse => self.descend(input, out),
             Ast::Literal(value) => out(input.derive(value.clone())),
@@ -437,7 +461,7 @@ impl Program {
                 }
             }
             Ast::Break(name) => Err(self.break_to(env, name)),
-        }
+        })
     }
 
     fn builtin(&self, index: usize, args: &[Node], env: &Env, input: Item, out: Out<'_>) -> R {
@@ -470,11 +494,13 @@ impl Program {
     /// `lhs op rhs`: the right side varies slowest.
     fn binary(&self, op: Op, lhs: Node, rhs: Node, env: &Env, input: Item, out: Out<'_>) -> R {
         let plain = input.detached();
-        self.eval(rhs, env, plain.clone(), &mut |r| {
+        let rhs_values = self.collect(rhs, env, plain.clone())?;
+        for r in rhs_values {
             self.eval(lhs, env, plain.clone(), &mut |l| {
-                out(input.derive(lift(apply(op, l.value, r.value.clone()))?))
-            })
-        })
+                out(input.derive(lift(apply(op, l.value, r.clone()))?))
+            })?;
+        }
+        Ok(())
     }
 
     /// `and` (stops on a falsy left side) and `or` (stops on a truthy one).

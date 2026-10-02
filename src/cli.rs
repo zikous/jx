@@ -94,6 +94,10 @@ struct Cli {
     #[arg(short = 'e', long)]
     exit_status: bool,
 
+    /// Maximum evaluator recursion depth.
+    #[arg(long, value_name = "N")]
+    recursion_limit: Option<usize>,
+
     /// Set $NAME to a string.
     #[arg(long, num_args = 2, value_names = ["NAME", "VALUE"], allow_hyphen_values = true)]
     arg: Vec<String>,
@@ -198,6 +202,7 @@ fn settings(cli: Cli, indent: Indent) -> Result<Settings> {
     Ok(Settings {
         program,
         environment: Environment { named, positional },
+        recursion_limit: cli.recursion_limit,
         files,
         mode,
         reading: Reading {

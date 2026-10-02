@@ -15,8 +15,8 @@ mod writer;
 use std::io;
 use std::process::ExitCode;
 
-/// Programs recurse deeply; give the evaluating thread room for it.
-const STACK_SIZE: usize = 512 << 20;
+const STACK_RED_ZONE: usize = 32 * 1024;
+const STACK_GROWTH: usize = 2 * 1024 * 1024;
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -26,18 +26,20 @@ fn main() -> ExitCode {
         .with_level(false)
         .with_ansi(false)
         .init();
-    let result = std::thread::Builder::new()
-        .stack_size(STACK_SIZE)
-        .spawn(|| run::run(&cli::from_args()?))
-        .expect("failed to start the evaluator thread")
-        .join();
-    match result {
-        Ok(Ok(code)) => ExitCode::from(code as u8),
-        Ok(Err(err)) if err.is_broken_pipe() => ExitCode::SUCCESS,
-        Ok(Err(err)) => {
+    let settings = match cli::from_args() {
+        Ok(settings) => settings,
+        Err(err) if err.is_broken_pipe() => return ExitCode::SUCCESS,
+        Err(err) => {
+            tracing::error!("jx: error: {err}");
+            return ExitCode::from(err.exit_code());
+        }
+    };
+    match stacker::maybe_grow(STACK_RED_ZONE, STACK_GROWTH, || run::run(&settings)) {
+        Ok(code) => ExitCode::from(code as u8),
+        Err(err) if err.is_broken_pipe() => ExitCode::SUCCESS,
+        Err(err) => {
             tracing::error!("jx: error: {err}");
             ExitCode::from(err.exit_code())
         }
-        Err(_) => ExitCode::from(2),
     }
 }

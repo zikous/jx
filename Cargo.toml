@@ -16,6 +16,7 @@ crossbeam-channel = "0.5"
 logos = "0.16.1"
 memchr = "2.8.3"
 indexmap = "2"
+stacker = "0.1"
 
 [profile.release]
 lto = "fat"

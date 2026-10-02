@@ -8,8 +8,8 @@ use std::thread;
 
 use crossbeam_channel::{bounded, unbounded};
 
-/// Worker threads get a large stack, since programs recurse deeply.
-const STACK_SIZE: usize = 256 << 20;
+const STACK_RED_ZONE: usize = 32 * 1024;
+const STACK_GROWTH: usize = 2 * 1024 * 1024;
 
 pub enum Flow {
     Continue,
@@ -43,9 +43,8 @@ pub fn run_ordered<C, T, W>(
     thread::scope(|scope| {
         for _ in 0..workers {
             let (queue, done, init, stopped) = (queue.clone(), done.clone(), &init, &stopped);
-            thread::Builder::new()
-                .stack_size(STACK_SIZE)
-                .spawn_scoped(scope, move || {
+            scope.spawn(move || {
+                stacker::maybe_grow(STACK_RED_ZONE, STACK_GROWTH, || {
                     let mut work = init();
                     for (seq, chunk) in queue {
                         if !stopped.load(Ordering::Relaxed)
@@ -54,8 +53,8 @@ pub fn run_ordered<C, T, W>(
                             break;
                         }
                     }
-                })
-                .expect("failed to start a worker thread");
+                });
+            });
         }
         drop((queue, done));
 

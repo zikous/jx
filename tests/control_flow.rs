@@ -48,6 +48,13 @@ fn functions_can_be_recursive_and_nested() {
         "[0,1,1,2,3,5,8,13,21,34]\n"
     );
     assert_eq!(
+        run(
+            "def fib: if . < 2 then . else (. - 1 | fib) + (. - 2 | fib) end; 25 | fib",
+            "null"
+        ),
+        "75025\n"
+    );
+    assert_eq!(
         run("def outer: def inner: 5; inner * 2; outer", "null"),
         "10\n"
     );
@@ -57,6 +64,36 @@ fn functions_can_be_recursive_and_nested() {
             "[1,[2,[3]],[]]"
         ),
         "3\n"
+    );
+}
+
+#[test]
+fn recursion_handles_very_deep_calls() {
+    assert_eq!(
+        run(
+            "def down: if . == 0 then . else . - 1 | down end; 100000 | down",
+            "null"
+        ),
+        "0\n"
+    );
+}
+
+#[test]
+fn recursion_limit_reports_a_clean_runtime_error() {
+    let out = common::exec(
+        &[
+            "--recursion-limit",
+            "50",
+            "-n",
+            "def down: if . == 0 then . else . - 1 | down end; 100 | down",
+        ],
+        "",
+    );
+    assert_eq!(out.code, 5);
+    assert!(
+        out.stderr.contains("recursion limit exceeded"),
+        "{}",
+        out.stderr
     );
 }
 

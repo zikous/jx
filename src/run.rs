@@ -29,6 +29,7 @@ pub enum Mode {
 pub struct Settings {
     pub program: String,
     pub environment: Environment,
+    pub recursion_limit: Option<usize>,
     pub files: Vec<String>,
     pub mode: Mode,
     pub reading: Reading,
@@ -192,7 +193,11 @@ impl<'o> Sink<'o> {
 }
 
 pub fn run(settings: &Settings) -> Result<i32> {
-    let program = Program::compile(&settings.program, &settings.environment)?;
+    let program = Program::compile(
+        &settings.program,
+        &settings.environment,
+        settings.recursion_limit,
+    )?;
     let stdout = io::stdout();
     let mut sink = Sink::new(stdout.lock(), settings.flush_each);
     let chunks = Chunks::new(&settings.files, settings.reading.framing);
@@ -248,8 +253,12 @@ pub fn run(settings: &Settings) -> Result<i32> {
         Mode::Each => {
             let projection = program.field_path().unwrap_or_default();
             let new_worker = || {
-                let program = Program::compile(&settings.program, &settings.environment)
-                    .expect("the program compiled already");
+                let program = Program::compile(
+                    &settings.program,
+                    &settings.environment,
+                    settings.recursion_limit,
+                )
+                .expect("the program compiled already");
                 let projection = &projection;
                 move |chunk: Chunk| run_chunk(&program, chunk, settings, projection)
             };
